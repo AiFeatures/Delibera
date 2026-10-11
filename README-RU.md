@@ -15,7 +15,7 @@
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-2496ED?logo=docker&logoColor=fff)](https://hub.docker.com/r/techbuzzz/delibera-server)
 [![Pulls: server](https://img.shields.io/docker/pulls/techbuzzz/delibera-server?logo=docker&logoColor=2496ED)](https://hub.docker.com/r/techbuzzz/delibera-server)
 [![Pulls: webui](https://img.shields.io/docker/pulls/techbuzzz/delibera-webui?logo=docker&logoColor=2496ED)](https://hub.docker.com/r/techbuzzz/delibera-webui)
-[![Web UI](https://img.shields.io/badge/Web%20UI-GitHub%20Pages-3E8AFF?logo=githubpages)](https://techbuzzz.github.io/Delibera/)
+[![Website](https://img.shields.io/badge/Website-GitHub%20Pages-3E8AFF?logo=githubpages)](https://techbuzzz.github.io/Delibera/)
 [![CI](https://github.com/techbuzzz/Delibera/actions/workflows/publish-nuget.yml/badge.svg)](https://github.com/techbuzzz/Delibera/actions/workflows/publish-nuget.yml)
 [![Docker CI](https://github.com/techbuzzz/Delibera/actions/workflows/publish-docker.yml/badge.svg)](https://github.com/techbuzzz/Delibera/actions/workflows/publish-docker.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10B981.svg)](LICENSE)
@@ -68,6 +68,27 @@
 | **🔌 Interface-First**            | Чистые абстракции для провайдеров, фабрик, билдеров и исполнителей                   |
 | **🤝 Microsoft.Extensions.AI**     | Поддержка `IChatClient` / `IEmbeddingGenerator` — подключайте OpenAI, Azure OpenAI, Ollama и любые совместимые бэкенды, с middleware (function calling, логирование) |
 | **🧱 Современный C# 15 (preview)** | Построено на .NET 10 с `LangVersion=preview`, file-scoped namespaces, records, span/SIMD горячие пути |
+
+### 🆕 Что нового в v10.5.3
+
+Опциональный CORS для статических браузерных клиентов, сайт проекта на GitHub Pages,
+улучшения доступности и исправления поведения Web UI, улучшения производительности сервера
+и рефакторинг констант BuiltIn. **Без ломающих изменений.**
+
+| Возможность | Описание |
+| --- | --- |
+| **🌐 Сайт проекта** | Статический сайт на Next.js на GitHub Pages — документация на любой глубине, заметки о релизах, измерения, шаблоны дебатов, извлечённые из исходников. Версия читается из csproj во время сборки и не может быть неверной. |
+| **🔓 Опциональный CORS** | `Delibera:Server:Cors:AllowedOrigins` регистрирует именованную CORS-политику для намеренно статических браузерных клиентов. По умолчанию выключен — Web UI использует свой same-origin BFF-маршрут. Origins сопоставляются точно; wildcard-выключателя нет. |
+| **♿ Доступность** | Раунды объявляются скринридерам через polite live region, каждая страница имеет свой заголовок, добавлены hover-состояния и видимые кольца фокуса. |
+| **⚡ Производительность** | ValidationFilter кэширует резолв типов валидаторов, RedisDebateOrchestrator переиспользует инжектированный ConnectionMultiplexer, SSE-писатель собирает фреймы один раз и флашит один раз. |
+| **🔧 Константы BuiltIn** | Единый источник истинности для HTTP-заголовков, имён SSE-событий, секций конфигурации и имён ролей во всех проектах Delibera. |
+| **🐛 Исправления Web UI** | Отмена различает «отменено» и «уже завершено», изменение фильтра перезагружает с первой страницы, npm test собирает перед запуском через pretest, прокси прерывает upstream SSE при отключении клиента (6 мс против 2699 мс). |
+| **🔄 Улучшения CI** | Публикация в Docker Hub за окружением одобрения `dockerhub-prod`, страницы релизов строятся из WhatsNew-документов, merge-коммиты вместо squash. |
+| **✅ Исправлено** | Typecheck Web UI проходил, молча проверяя меньше — Nuxt 4.6.1, vue-router ^5.4.0, vue-tsc 3.3, vitest 5. Lockfile перегенерирован под npm 10 в соответствии с пином в Dockerfile. |
+
+Подробности: [docs/WhatsNew-v10.5.3.md](docs/WhatsNew-v10.5.3.md).
+
+---
 
 ### 🆕 Что нового в v10.5.2
 
@@ -261,7 +282,7 @@ Redis остаётся **выключенным**, пока не задан `Del
 
 ```bash
 curl -O https://raw.githubusercontent.com/techbuzzz/Delibera/main/deploy/docker-compose.hub.yml
-export DELIBERA_VERSION=10.5.2      # зафиксировать релиз; без переменной тянется :latest
+export DELIBERA_VERSION=10.5.3      # зафиксировать релиз; без переменной тянется :latest
 docker compose -f docker-compose.hub.yml up -d
 ```
 
@@ -269,23 +290,20 @@ docker compose -f docker-compose.hub.yml up -d
 > Все публикуемые порты слушают `127.0.0.1`. Поставьте аутентифицирующий обратный прокси, прежде чем
 > открывать этот стек в сеть, которой не управляете.
 
-#### 🌐 Веб-интерфейс на GitHub Pages
+#### 🌐 Сайт проекта на GitHub Pages
 
-Тот же интерфейс статически публикуется на <https://techbuzzz.github.io/Delibera/> при каждом
-мердже в `main`.
+Сайт проекта публикуется на <https://techbuzzz.github.io/Delibera/> при каждом мердже в `main`.
+Он рендерит собственный Markdown этого репозитория — руководства из `docs/`, заметки о релизах,
+отчёт о замерах, changelog и шаблоны дебатов, разобранные из `Delibera.Core.cs`, — поэтому
+страница не может показывать версию, функцию или число, которых нет в коде. Подробности:
+[`site/README.md`](site/README.md).
 
-У статической сборки **нет сервера**, поэтому same-origin BFF-маршрута в ней не существует — нужен
-абсолютный origin API, и тот сервер должен разрешать origin Pages через CORS:
-
-```yaml
-environment:
-  DELIBERA_CORS_ORIGIN: https://techbuzzz.github.io
-```
-
-CORS **выключен по умолчанию** и остаётся выключенным, пока не перечислены origins. Это намеренно:
-именно отсутствие заголовка не даёт случайной веб-странице прочитать ответ этого API, а контейнерному
-Web UI он не нужен вовсе. Комбинация «wildcard + AllowCredentials» отклоняется на старте с сообщением,
-называющим конкретный ключ конфигурации.
+Сам веб-интерфейс **там не публикуется** — он поставляется в образе
+[`techbuzzz/delibera-webui`](https://hub.docker.com/r/techbuzzz/delibera-webui) и предназначен для
+работы рядом с `Delibera.Server`, который предоставляет same-origin BFF-маршрут
+`/api/delibera/**`, от которого зависит UI. Статическая сборка не имеет Nitro-сервера и, значит,
+BFF, поэтому ей потребовался бы отдельный API-origin с разрешённым CORS — это осознанное решение
+владельца, а не то, что workflow Pages настраивает молча.
 
 #### 📥 Из исходников
 
@@ -929,7 +947,7 @@ docker compose -f docker-compose.hub.yml up -d
 ```
 
 Забирает `techbuzzz/delibera-server` и `techbuzzz/delibera-webui` из Docker Hub. Укажите
-`DELIBERA_VERSION=10.5.2`, чтобы зафиксировать релиз.
+`DELIBERA_VERSION=10.5.3`, чтобы зафиксировать релиз.
 
 ### Веб-интерфейс
 

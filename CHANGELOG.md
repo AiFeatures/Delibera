@@ -5,7 +5,163 @@ All notable changes to **Delibera** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [10.5.3] - 2026-10-11
+
+**No breaking changes.** This release adds opt-in CORS, a project website on GitHub Pages,
+Web UI accessibility and behaviour fixes, server performance improvements, and a BuiltIn
+constants refactor. Docker Hub and NuGet publish workflows are now behind approval
+environments.
+
+### Added — project website on GitHub Pages
+
+`pages.yml` now builds and deploys a Next.js static site in `site/` rather than the Nuxt
+Web UI. The site is a view over this repository: every page is rendered at build time from
+content that already lives here — the version from `Delibera.Core.csproj`, docs from
+`docs/`, release notes from `docs/WhatsNew-*.md`, measurements from
+`docs/performance-measurements.md`, and debate templates extracted from `DebateTemplate.cs`.
+
+The docs route is a catch-all, so nested files keep their directory in the URL. Adding a
+Markdown file under `docs/` adds a page automatically. A broken cross-link fails the deploy:
+`scripts/verify-export.mjs` walks the export and fails on an internal href with no file
+behind it, a missing `/Delibera` prefix, or a `#fragment` pointing at a renamed heading.
+
+The Web UI is **not** deployed to Pages. It ships in the `techbuzzz/delibera-webui`
+container image and is meant to run next to `Delibera.Server`, which provides the
+same-origin BFF route `/api/delibera/**`.
+
+### Added — opt-in CORS for static browser clients
+
+`Delibera:Server:Cors:AllowedOrigins` registers a named CORS policy listing the browser
+origins permitted to call the API cross-origin, and `UseCors` is wired only when that
+list is non-empty.
+
+**Off by default, and the default is the point.** The Web UI reaches the API through its
+own same-origin BFF route and never needs CORS. The absent header is also what stops an
+arbitrary web page from *reading* a response — a cross-origin `fetch` still fires the
+request without it, it just cannot see the answer. Turning this on globally would have
+added a browser-side CSRF vector to an API that is unauthenticated, unthrottled, and spends
+real credits per debate.
+
+Set it only for a deliberately static client that calls the API cross-origin:
+
+```yaml
+environment:
+  DELIBERA_CORS_ORIGIN: https://example.com
+```
+
+Origins are matched exactly; there is no wildcard switch. `AllowCredentials` together with
+`*` is rejected at startup with a message naming the config key, rather than by the
+framework with one that names nothing. 13 new tests: 8 asserting what gets registered, and
+5 driving the real pipeline over HTTP — that a default host emits no
+`Access-Control-Allow-Origin`, that a configured origin gets its own origin echoed back
+rather than a wildcard, that an unlisted origin gets nothing, that the preflight is
+answered, and that `X-Correlation-Id` is exposed.
+
+### Added — BuiltIn constants
+
+`src/Delibera.Core/BuiltIn.cs` — a single source of truth for HTTP headers, SSE event names,
+config sections, role names, model names, timeouts, Redis keys, and other magic strings that
+previously drifted between Delibera.Core, Delibera.Redis, Delibera.Server and consumer
+applications. SSE event names remain a contract with the Web UI.
+
+### Changed — C# 15 where it compiles, and the two features that need .NET 11
+
+`LangVersion=preview` was already set across the solution, but what that actually buys depended
+on which SDK was installed: 10.0.112 ships Roslyn 5.0 and knows no C# 15 at all, while 10.0.401
+ships Roslyn 5.9. A `global.json` now pins `10.0.401` (`rollForward: latestFeature`) so a machine
+without it cannot silently fail to compile. `Delibera.Redis` gained the `LangVersion=preview` the
+other six source projects already had.
+
+Union types and closed hierarchies compile as keywords but are rejected on `net10.0` — they need
+`System.Runtime.CompilerServices.IUnion` and `IsClosedTypeAttribute`, which ship with **.NET 11**.
+They are deferred to the `net11.0` retarget along with the runtime work it unlocks. The full
+feature gate is recorded in `docs/NET10-Upgrade.md`.
+
+What did ship is collection expression arguments on the paths that build a collection whose final
+size is known: voting score tables, chunk lists, sentence-selection and deduplication buffers, and
+the Knowledge Keeper's multi-corpus merge. Borda counting also stops materialising a sorted copy of
+each ballot, and the semantic compressor no longer materialises a sorted copy of every sentence it
+is about to iterate over.
+
+### Fixed — three per-request costs on the server
+
+- `ValidationFilter` called `typeof(IValidator<>).MakeGenericType(arg.GetType())` for every
+  argument of every request. Building a closed generic type allocates a runtime type; the mapping
+  is now cached per argument type.
+- `RedisDebateOrchestrator` opened its own `ConnectionMultiplexer`, bypassing the singleton the
+  host registers — a second TCP pool, handshake and reconnect timers for the life of the process,
+  for a class whose own documentation claimed it shared the connection with `RedisDebateCache`.
+  It now reuses the injected multiplexer when there is one, and still opens its own when
+  constructed outside DI.
+- The SSE writer emitted each frame as six writes plus a flush, and re-encoded the event name from
+  string to UTF-8 on every event. A frame is now assembled once in the response pipe and flushed
+  once, with event names as `u8` literals. Per-frame flushing is unchanged deliberately: a
+  buffering proxy once passed every functional test here while delivering rounds 150–200 seconds
+  late.
+
+### Added — regression tests for both
+
+`Validator_Type_Is_Resolved_Once_Per_Contract_Not_Per_Request` fails if the cached validator type
+disappears. `Round_Is_Flushed_While_The_Debate_Is_Still_Running` withholds the terminal event and
+requires the round to reach the wire within three seconds; it was verified to fail when the
+per-frame flush is removed.
+
+`docs/performance-measurements.md` records the before/after measurement, including the result that
+the framework-overhead benchmark shows **no change** — those paths are not exercised by that
+workload, and the server-side figures were not measured at all in this pass.
+
+### Changed — GitHub Pages deploys the project website, not the Web UI
+
+`pages.yml` previously built and deployed the Nuxt Web UI as a static export. That was wrong: the
+Web UI is meant to ship in the container image (`techbuzzz/delibera-webui`) and run next to
+`Delibera.Server`, which provides the same-origin BFF route `/api/delibera/**`. A static export has
+no Nitro server and therefore no BFF, so the deployed site could only reach an API via a separate
+CORS-enabled origin — a deliberate owner decision, not something the workflow should configure
+silently.
+
+Pages now publishes a real project site rather than a single hand-written page.
+
+**The site is a view over this repository, not a copy of it.** `site/` is a Next.js app
+configured for `output: 'export'` (following
+[nextjs/deploy-github-pages](https://github.com/nextjs/deploy-github-pages)). Every page is
+rendered at build time from content that already lives here:
+
+| Page | Source |
+| --- | --- |
+| `/` | version from `Delibera.Core.csproj`, release cards from `docs/WhatsNew-*.md` |
+| `/docs/<slug>/` | every Markdown file under `docs/`, at any depth |
+| `/blog/<version>/` | `docs/WhatsNew-*.md` |
+| `/measurements/` | `docs/performance-measurements.md` |
+| `/templates/` | `src/Delibera.Core/Templates/DebateTemplate.cs` |
+| `/changelog/` | `CHANGELOG.md`, split per release |
+
+The docs route is a catch-all, so nested files keep their directory in the URL and a
+directory's `README.md` collapses to the directory itself — `docs/TASKS/README.md` is
+`/docs/tasks/`, the URL the previous landing page already linked to. The work log in
+`docs/TASKS/` and the planning notes in `docs/scope/` are published for the same reason:
+they are committed and public, and dropping them would be a coverage regression dressed up
+as a curation decision.
+
+Consequences worth stating, because they are the point:
+
+- **The version cannot be wrong.** It is read from the csproj that `publish-nuget.yml` actually
+  packs — not from a tag (which can be pushed before the package reaches nuget.org) and not from
+  this changelog (which is edited by hand). If it cannot be resolved, the build fails.
+- **The templates page cannot be stale.** Roles, strategy, chairman stance and round count are
+  extracted from `DebateTemplate.cs` at build time. If the parse finds nothing, the page says so
+  rather than showing a list that no longer matches the package.
+- **Adding a Markdown file adds a page.** No route list to update, and every existing cross-link
+  to that file starts resolving. Repository-relative links (`../CHANGELOG.md`,
+  `docs/performance-measurements.md#3-context-compression`) are rewritten to site routes; targets
+  the site does not serve become absolute GitHub links.
+- **A broken cross-link fails the deploy.** `scripts/verify-export.mjs` walks the export and fails
+  on an internal href with no file behind it, a missing `/Delibera` prefix, or a `#fragment`
+  pointing at a renamed heading. All three pass a green `next build` and 404 in production —
+  GitHub Pages is case-sensitive while every local check is not.
+
+Code blocks are highlighted with Shiki using GitHub's own TextMate grammars, in both light and dark
+themes, following `prefers-color-scheme`. The site ships no CSS framework and no client-side
+JavaScript beyond the Next.js runtime.
 
 ### Added — opt-in CORS for static browser clients
 
@@ -18,12 +174,11 @@ page from *reading* a response — a cross-origin `fetch` still fires the reques
 cannot see the answer. Turning this on globally would have added a browser-side CSRF vector to an
 API that is unauthenticated, unthrottled, and spends real credits per debate.
 
-Set it only for a deliberately static client — the GitHub Pages build of the Web UI, which has no
-Nitro server and therefore no BFF route. In compose:
+Set it only for a deliberately static client that calls the API cross-origin. In compose:
 
 ```yaml
 environment:
-  DELIBERA_CORS_ORIGIN: https://techbuzzz.github.io
+  DELIBERA_CORS_ORIGIN: https://example.com
 ```
 
 Origins are matched exactly; there is no wildcard switch. `AllowCredentials` together with `*`
@@ -33,19 +188,73 @@ pipeline over HTTP — that a default host emits no `Access-Control-Allow-Origin
 configured origin gets its own origin echoed back rather than a wildcard, that an unlisted origin
 gets nothing, that the preflight is answered, and that `X-Correlation-Id` is exposed.
 
-### Fixed â€” the static Web UI build ignored its configured API origin
+### Fixed — the Web UI typecheck was passing while silently checking less
 
-`NUXT_PUBLIC_DELIBERA_API_BASE` did not reach the bundle, so a GitHub Pages build configured with
-it still called its own origin and every request 404'd. `pages.yml` was green throughout: Nuxt
-substitutes `import.meta.env.NUXT_PUBLIC_*` only for names declared under `runtimeConfig.public`,
-and an undeclared one is silently left as-is rather than rejected. `deliberaApiBase` is now
-declared (empty, so the container's same-origin behaviour is unchanged), and `pages.yml` asserts
-that a configured origin actually appears in the export â€” a dead site is no longer able to report
-a successful deployment.
+`npm run typecheck` printed `[Vue] Load plugin failed: vue-router/volar/sfc-route-blocks` on every
+run and exited **0**, so CI reported green. The plugin Nuxt writes into the generated tsconfig
+comes from `vue-router`, and the app pinned `vue-router@^4` — a different major from the one
+`nuxt` itself depends on, for a package no source file imports. Two defects sat behind the one
+message: `vue-tsc@2` cannot load a `vue-router@5` plugin at all, and once that is upgraded the
+plugin must also be resolvable from the project root, which it is not while it only exists
+nested under `node_modules/nuxt`. Nuxt is now `4.6.1`, `vue-router@^5.4.0` matching it,
+`vue-tsc@3.3`, `vitest@5`, `@nuxt/test-utils@4`, and the check is clean for the first time.
 
-Verified: a build with the variable set carries it into 4 places in the export; a build without it
-carries it into none; the new gate passes when the origin is present, fails naming the missing
-config key when it is not, and is a no-op in preview mode. Web UI tests 34/34.
+### Changed — Node is pinned to an exact patch, because the requirement is an exact range
+
+`nuxt@4.6.1` declares `engines.node: ^22.22.3 || ^24.15.0 || >=26.0.0`, so the floating
+`node:22-alpine` and `.nvmrc: 22` that worked by accident stop working the moment the tag moves
+against us. Both are now `22.23.3`, the Dockerfile resolving one `ARG NODE_VERSION` across its
+three stages. Node 24 ("Krypton") satisfies the range too and is the natural move before 22
+("Jod") leaves maintenance in April 2027 — but that also moves the bundled npm from 10.x to
+11.x, which deserves its own change.
+
+### Fixed — the proxy kept upstream SSE connections open after the browser left
+
+Every upstream call runs with `timeout: 0`, because a debate legitimately takes 150–200 s and its
+stream stays open longer still, so nothing else ever ended those requests. Closing the tab,
+navigating away or letting `EventSource` reconnect left the server-side connection running for
+the remainder of the debate — one leaked stream per piece of user navigation, invisible from a UI
+that had simply gone. The proxy now aborts its own fetch when the response closes before it was
+fully written, and the resulting read error is swallowed rather than thrown: a client hanging up
+is not an upstream fault worth reporting to nobody.
+
+Measured on the test fixture, the upstream socket closes **6 ms** after the client disconnects
+with the fix and **2699 ms** without it — the second being the moment the fake upstream ends its
+own response, which is exactly the point: a connection the proxy never cancelled closes anyway.
+The regression test asserts the timing, not the count, because the count passes either way.
+
+### Fixed — three Web UI behaviours that were silently wrong
+
+- **Cancel reported itself without saying anything.** Both branches of `onCancel` called
+  `loadRecord()`, so "cancelled" and "had already finished" produced identical silence and an
+  unexplained status change. They now say which one happened.
+- **Changing a filter did not re-query.** The selects only changed what was *selected*; the list
+  kept rendering the previous filter's results under controls claiming the new one, and paging
+  was never reset. A filter change now reloads from page 1.
+- **`npm test` failed on a clean checkout.** The SSE suite runs the built Nitro server, and CI
+  only passed because its `build` step happens to run first. `pretest` now builds.
+
+### Added — the live view announces itself, and the pages identify themselves
+
+Rounds arriving over SSE were invisible to a screen reader: the count in the heading changed
+silently, and the reader was most likely on the verdict panel. A polite live region now announces
+each round — polite, because rounds arrive as a steady drip and interrupting whatever is being
+read for each one would make the page unusable rather than live. Every tab was titled "Delibera —
+AI council"; each route now titles itself, and a debate names itself by its label once loaded.
+Buttons, inputs and rows gained hover states and a visible `:focus-visible` ring, the browser
+default being near-invisible against these dark surfaces, and the error page now shows the status
+message and clears the error through `clearError` instead of relying on a link that renders
+without the router state it needs.
+
+### Changed — the server route stays on `h3`, and says why
+
+Nuxt 4.6 added `nuxt/server`, a server-agnostic surface that re-declares the request helpers
+against Nuxt's own `RequestEvent` and omits the response-writing helpers, so a non-Nitro builder
+can satisfy it. This route is exactly the case it cannot serve: forwarding an upstream body
+verbatim is `sendWebResponse`, streaming SSE chunk by chunk is `sendStream`, and Nuxt's
+`RequestEvent` is not assignable to h3's `H3Event` — mixing the surfaces fails typecheck, not at
+runtime. The imports stay on `h3` with the reasoning recorded at the import, so the next person
+does not spend the same afternoon on it. An unused `H3Event` type import went with it.
 
 ## [10.5.2] - 2026-10-09
 

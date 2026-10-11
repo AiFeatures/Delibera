@@ -37,8 +37,15 @@ Then release notes:
 ### 2. Open a PR and merge it
 
 CI runs three gates on the PR: `build & test`, `build (verify only)`, `webui tests`. Wait for all
-three. Squash-merge — the repo squash-merges, so a feature branch's SHAs never become ancestors
-of `main`.
+three. **Merge with a merge commit** — not squash.
+
+Squash was what made branch handling expensive: the squashed PR's commits are not ancestors of
+`main`, so `git merge-base --is-ancestor <branch> main` cannot answer whether the work shipped,
+and merging `main` back into a long-lived feature branch produces a disconnected merge rather
+than a fast-forward. A merge commit keeps the ancestry, which makes the back-merge ordinary and
+the ancestry check meaningful. `git log --first-parent main` still reads as the release list.
+
+Delete the branch after merging. It is never reopened: a new change starts from a fresh branch.
 
 ### 3. Verify before tagging
 
@@ -85,6 +92,28 @@ the tell: a wrong token takes about a second and says `unauthorized`.
 
 ## After tagging
 
+### Approve the publish
+
+Both publish workflows run their publish job inside a GitHub environment — `nuget-prod` and
+`dockerhub-prod`. A tag push queues the run and it **waits** at that job for approval, once
+`Required reviewers` is enabled on the environment.
+
+To approve: **Actions → the run → the waiting job → Review deployments → Approve and deploy.**
+
+This is a separate layer from the tag gate, and it is the one that actually protects the
+registries. `if: startsWith(github.ref, 'refs/tags/v')` already stops a merge to `main` from
+publishing anything — but it does nothing about a mistyped tag, or about anyone able to push a
+`v*` tag. That path overwrites `latest` on a registry consumers pull from, and re-tagging does
+not undo it.
+
+Enabling required reviewers is a repository setting, not a workflow change:
+**Settings → Environments → `nuget-prod` / `dockerhub-prod` → Required reviewers.** Until then
+the environment only scopes secrets, the deployment URL and the history.
+
+The `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets can be moved from repository scope into
+`dockerhub-prod` at the same time — the job already runs inside that environment, so they stop
+being readable by every other workflow.
+
 ### Check what actually landed
 
 Green pipelines are not proof that something was published:
@@ -99,20 +128,21 @@ green. That is the failure mode `--skip-duplicate` creates.
 
 ### Backfilling a release page
 
-Normally nothing to do: a merge to `main` refreshes the release page for the newest `v*` tag
-reachable from `main`, so the page picks up the header and the WhatsNew document without a
-handful of clicks.
+Nothing happens on a merge any more. `release` is tag-only, so the page is written once when the
+tag lands and is not rewritten by unrelated commits afterwards — which matters, because a merge
+that happened to touch the header or the WhatsNew document used to silently edit an already
+published release.
 
-Run **Actions → release → Run workflow** only to repair a *specific* tag — for instance to rebuild
-the body of a release whose page was created by hand. It creates or updates; it never duplicates.
+**Actions → release → Run workflow** repairs a page: name the tag in the `tag` input to rebuild
+that release, or leave it empty to refresh the newest reachable one. It creates or updates; it
+never duplicates.
 
-That workflow distinguishes two situations on purpose, and the difference is what keeps a routine
-merge from reddening `main`:
+The workflow still distinguishes two situations on purpose:
 
 | Trigger | Behaviour on a tag/`<Version>` mismatch |
 |---|---|
 | `v*` tag pushed, or dispatch naming a tag | **fails** — that tag exists to publish something specific |
-| merge to `main` | **exits 0** — an unreleased version bump is a normal state, not an error |
+| dispatch with no tag (sync mode) | **exits 0** — an unreleased version bump is a normal state, not an error |
 
 ### Backfilling Docker Hub cards
 
@@ -175,58 +205,40 @@ curl -s -o /dev/null -w '%{http_code}\n' https://techbuzzz.github.io/Delibera/
 A 404 there, served by GitHub.com itself, means nothing has ever been deployed to this Pages
 site. Only the Source dropdown in Settings says whether it is configured to accept deploys.
 
-`pages.yml` deploys the Web UI as a **static** export on every merge to `main`. Two consequences:
+`pages.yml` builds the **Next.js site** in `site/` and publishes the static export in `site/out`
+on every merge to `main`. The site is a view over this repository: the guides and release notes in
+`docs/`, `CHANGELOG.md`, and the debate templates in `DebateTemplate.cs`. Nothing is copied into a
+second location, so a page cannot advertise a version, a feature or a measurement the code does not
+have.
 
-- A static export has **no Nitro server**, so the `/api/delibera/**` BFF route does not exist
-  there. The browser needs an absolute origin via `NUXT_PUBLIC_DELIBERA_API_BASE`, and that
-  origin must allow the Pages origin via CORS — which `Delibera.Server` does not do by default.
-  Unset, the site deploys and its requests 404: a UI preview, not an install.
-- Nuxt 4 emits to `.output/public`, **not** `dist`. GitHub's own sample workflow still uploads
-  `./dist` because it predates Nuxt 4.
+The version is read from `Delibera.Core.csproj` at build time — the project `publish-nuget.yml`
+actually packs. A tag can be pushed before the package reaches nuget.org and the changelog is edited
+by hand, so neither is a trustworthy source. If the version cannot be resolved the build fails
+rather than publishing a placeholder.
+
+The Web UI is **not** deployed to Pages. It ships in the `techbuzzz/delibera-webui` container image
+and is meant to run next to `Delibera.Server`, which provides the same-origin BFF route
+`/api/delibera/**`. A static export has no Nitro server and therefore no BFF, so the UI would need
+a separate CORS-enabled API origin — a deliberate owner decision, not something the Pages workflow
+should configure silently.
 
 ### Reproduce the Pages build locally
 
-`pages.yml` runs steps that PR CI does not: `nuxt generate`, and two assertions about the export.
-That gap is worth closing by hand before every Pages-related change, because none of it can fail
-a pull request:
+The workflow runs `npm ci`, then `next build` with `PAGES_BASE_PATH` set to the base path
+`actions/configure-pages` computes for this repo (`/Delibera`). Set the same variable locally or the
+export will differ from production:
 
 ```bash
-cd src/Delibera.WebUI
+cd site
 npm ci
-npm run generate                                  # 6 routes -> .output/public
-test -f .output/public/index.html                 # the gate in pages.yml
-test -f .output/public/debates/new/index.html    # prerender.routes actually took
-
-# the origin must be BAKED IN, not merely configured
-NUXT_PUBLIC_DELIBERA_API_BASE=https://example.test npm run generate
-grep -rqF 'https://example.test' .output/public   # 0 hits = the whole feature is dead
+PAGES_BASE_PATH=/Delibera npm run build   # writes out/
+npm run verify                            # every internal link, asset and anchor resolves
 ```
 
-That last `grep` is the check that matters. `NUXT_PUBLIC_*` is substituted only for names declared
-under `runtimeConfig.public`; an undeclared one is dropped silently, the build stays green, and the
-deployed site quietly calls its own origin. It has already happened once here.
-
-Note `npm run build` (not `generate`) before `npm test` — the SSE suite loads
-`.output/server/index.mjs`, which a static export does not produce, and reports a suite failure
-that looks like a broken test rather than a missing artefact.
-
-### Verify base-path runs from PowerShell, not Git Bash
-
-Git Bash rewrites an environment value that looks like a POSIX path when it exports it to a child
-process. `NUXT_APP_BASE_URL=/Delibera npm run generate` reaches the build as
-`C:/Program Files/Git/Delibera`.
-
-That malformed base produces exactly the output a real Nuxt bug would: `.output/public/index`
-and `.output/public/debates/new` containing `Redirecting...` instead of documents, no `index.html`
-anywhere, and a green build. I spent a cycle "fixing" nuxt.config.ts on the strength of that.
-
-Set these variables from PowerShell, where the value passes through untouched, before believing
-anything about a base-path build:
-
-```powershell
-$env:NUXT_APP_BASE_URL = '/Delibera'
-npm run generate
-```
+`npm run verify` is not decoration. A green `next build` proves the pages compiled, not that they
+link to each other, and three failure modes only appear on the live site: an internal href with no
+emitted file behind it, a missing `/Delibera` prefix, and a `#fragment` pointing at a renamed
+heading. `verify` fails the deploy on all three.
 
 ---
 

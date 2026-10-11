@@ -15,7 +15,7 @@
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-2496ED?logo=docker&logoColor=fff)](https://hub.docker.com/r/techbuzzz/delibera-server)
 [![Pulls: server](https://img.shields.io/docker/pulls/techbuzzz/delibera-server?logo=docker&logoColor=2496ED)](https://hub.docker.com/r/techbuzzz/delibera-server)
 [![Pulls: webui](https://img.shields.io/docker/pulls/techbuzzz/delibera-webui?logo=docker&logoColor=2496ED)](https://hub.docker.com/r/techbuzzz/delibera-webui)
-[![Web UI](https://img.shields.io/badge/Web%20UI-GitHub%20Pages-3E8AFF?logo=githubpages)](https://techbuzzz.github.io/Delibera/)
+[![Website](https://img.shields.io/badge/Website-GitHub%20Pages-3E8AFF?logo=githubpages)](https://techbuzzz.github.io/Delibera/)
 [![CI](https://github.com/techbuzzz/Delibera/actions/workflows/publish-nuget.yml/badge.svg)](https://github.com/techbuzzz/Delibera/actions/workflows/publish-nuget.yml)
 [![Docker CI](https://github.com/techbuzzz/Delibera/actions/workflows/publish-docker.yml/badge.svg)](https://github.com/techbuzzz/Delibera/actions/workflows/publish-docker.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10B981.svg)](LICENSE)
@@ -68,6 +68,27 @@ well-reasoned outcomes** rather than single-model guesses.
 | **🤝 Microsoft.Extensions.AI**| First-class support for `IChatClient` / `IEmbeddingGenerator` — plug in OpenAI, Azure OpenAI, Ollama or any compatible backend, with middleware (function calling, logging) |
 | **🛑 Cooperative Cancellation**| Every public async method accepts a `CancellationToken`; a host shutdown or user cancel aborts the debate mid-flight (rounds, LLM calls, MCP tools, RAG, file saves) |
 | **🧱 Modern C# 15 (preview)** | Built on .NET 10 with `LangVersion=preview`, file-scoped namespaces, records, span/SIMD hot paths |
+
+### 🆕 What's new in v10.5.3
+
+Opt-in CORS for static browser clients, a project website on GitHub Pages, Web UI
+accessibility and behaviour fixes, server-side performance improvements, and a BuiltIn
+constants refactor. **No breaking changes.**
+
+| Feature | Description |
+| --- | --- |
+| **🌐 Project website** | Next.js static site on GitHub Pages — docs at any depth, release notes, measurements, debate templates extracted from source. The version is read from the csproj at build time and cannot be wrong. |
+| **🔓 Opt-in CORS** | `Delibera:Server:Cors:AllowedOrigins` registers a named CORS policy for deliberately static browser clients. Off by default — the Web UI uses its same-origin BFF route. Origins matched exactly; no wildcard switch. |
+| **♿ Accessibility** | Rounds announced to screen readers via a polite live region, every route titles itself, hover states and visible focus rings. |
+| **⚡ Performance** | ValidationFilter caches validator type resolution, RedisDebateOrchestrator reuses the injected ConnectionMultiplexer, SSE writer assembles frames once and flushes once. |
+| **🔧 BuiltIn constants** | Single source of truth for HTTP headers, SSE event names, config sections, and role names across all Delibera projects. |
+| **🐛 Web UI fixes** | Cancel distinguishes "cancelled" from "already finished", filter change reloads from page 1, npm test builds first via pretest, proxy aborts upstream SSE on client disconnect (6 ms vs 2699 ms). |
+| **🔄 CI improvements** | Docker Hub publish behind approval environment `dockerhub-prod`, release pages built from WhatsNew docs, merge commits instead of squash. |
+| **✅ Fixed** | Web UI typecheck was passing while silently checking less — Nuxt 4.6.1, vue-router ^5.4.0, vue-tsc 3.3, vitest 5. Lockfile regenerated under npm 10 to match Dockerfile pin. |
+
+Full account: [docs/WhatsNew-v10.5.3.md](docs/WhatsNew-v10.5.3.md).
+
+---
 
 ### 🆕 What's new in v10.5.2
 
@@ -260,7 +281,7 @@ Images are published on every `v*` tag for `linux/amd64` **and** `linux/arm64`:
 
 ```bash
 curl -O https://raw.githubusercontent.com/techbuzzz/Delibera/main/deploy/docker-compose.hub.yml
-export DELIBERA_VERSION=10.5.2      # pin a release; omit to track :latest
+export DELIBERA_VERSION=10.5.3      # pin a release; omit to track :latest
 docker compose -f docker-compose.hub.yml up -d
 ```
 
@@ -268,22 +289,20 @@ docker compose -f docker-compose.hub.yml up -d
 > published port binds to `127.0.0.1`. Put an authenticating reverse proxy in front before exposing
 > this stack to any network you do not control.
 
-#### 🌐 Web UI on GitHub Pages
+#### 🌐 Project website on GitHub Pages
 
-The same UI is deployed statically to <https://techbuzzz.github.io/Delibera/> on every merge to
-`main`.
+The project site is published at <https://techbuzzz.github.io/Delibera/> on every merge to
+`main`. It renders this repository's own Markdown — the guides in `docs/`, the release notes, the
+measured-behaviour report, the changelog, and the debate templates parsed from
+`Delibera.Core.cs` — so a page cannot advertise a version, a feature or a number the code does
+not have. See [`site/README.md`](site/README.md).
 
-A static export has **no server**, so the UI's same-origin BFF route does not exist there — it needs
-an absolute API origin, and that server must allow the Pages origin via CORS:
-
-```yaml
-environment:
-  DELIBERA_CORS_ORIGIN: https://techbuzzz.github.io
-```
-
-CORS is **off by default** and stays off unless you list origins. That is deliberate: the missing
-header is what stops a random web page from reading this API, and the Web UI in the container does
-not need it. `Wildcard + AllowCredentials` is rejected at startup with a message naming the key.
+The Web UI itself is **not** deployed there — it ships in the
+[`techbuzzz/delibera-webui`](https://hub.docker.com/r/techbuzzz/delibera-webui) container image and
+is meant to run next to `Delibera.Server`, which provides the same-origin BFF route
+`/api/delibera/**` the UI depends on. A static export has no Nitro server and therefore no BFF,
+so it would need a separate CORS-enabled API origin — a deliberate owner decision, not something
+the Pages workflow configures silently.
 
 #### 📥 From source
 
@@ -944,7 +963,7 @@ docker compose -f docker-compose.hub.yml up -d
 ```
 
 Pulls `techbuzzz/delibera-server` and `techbuzzz/delibera-webui` from Docker Hub. Set
-`DELIBERA_VERSION=10.5.2` to pin a specific release.
+`DELIBERA_VERSION=10.5.3` to pin a specific release.
 
 ### Web UI
 
