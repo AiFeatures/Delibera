@@ -31,6 +31,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.repository_owner == 'techbuzzz'
     name: Build
     runs-on: ubuntu-latest
     steps:
@@ -70,6 +71,7 @@ jobs:
           path: site/out
 
   deploy:
+    if: github.repository_owner == 'techbuzzz'
     name: Deploy
     runs-on: ubuntu-latest
     needs: build
