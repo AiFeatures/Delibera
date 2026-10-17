@@ -25,7 +25,6 @@ permissions:
 
 jobs:
   sync:
-    if: github.repository_owner == 'techbuzzz'
     name: Sync Docker Hub metadata
     runs-on: ubuntu-latest
     steps:
